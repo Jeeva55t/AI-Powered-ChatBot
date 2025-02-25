@@ -8,3 +8,4 @@ langchain_google_genai
 langchain-community
 pdfplumber
 pymupdf
+python-docx
