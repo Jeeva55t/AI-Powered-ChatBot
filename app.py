@@ -1,4 +1,7 @@
 import streamlit as st
+import pdfplumber
+from PyPDF2.errors import PdfReadError
+import fitz
 from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import os
@@ -20,12 +23,25 @@ genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 
 def get_pdf_text(pdf_docs):
-    text=""
+    text = ""
     for pdf in pdf_docs:
-        pdf_reader= PdfReader(pdf)
-        for page in pdf_reader.pages:
-            text+= page.extract_text()
-    return  text
+        try:
+            pdf_reader = PdfReader(pdf)
+            for page in pdf_reader.pages:
+                text += page.extract_text() or ""  # Extract text if available
+        except PdfReadError:
+            st.warning(f"Warning: {pdf.name} has issues, trying alternative method...")
+            try:
+                with pdfplumber.open(pdf) as pdf_plumber:
+                    for page in pdf_plumber.pages:
+                        text += page.extract_text() or ""
+            except Exception as e:
+                st.error(f"Failed to read {pdf.name}: {e}")
+    
+    if not text.strip():
+        st.error("Could not extract any text. The PDF might be a scanned image.")
+    
+    return text
 
 
 
@@ -44,7 +60,7 @@ def get_vector_store(text_chunks):
 def get_conversational_chain():
 
     prompt_template = """
-    Answer the question as detailed as possible from the provided context, make sure to provide all the details, if the answer is not in
+    Answer the question as detailed as possible from the provided context, make sure to provide all the details, if the answer is not in the 
     provided context just say, "answer is not available in the context", don't provide the wrong answer\n\n
     Context:\n {context}?\n
     Question: \n{question}\n
