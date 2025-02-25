@@ -1,6 +1,7 @@
 import streamlit as st
 import pdfplumber
 from PyPDF2.errors import PdfReadError
+import docx
 import fitz
 from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -22,27 +23,42 @@ genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 
 
-def get_pdf_text(pdf_docs):
+def get_pdf_text(files):
     text = ""
-    for pdf in pdf_docs:
-        try:
-            pdf_reader = PdfReader(pdf)
-            for page in pdf_reader.pages:
-                text += page.extract_text() or ""  # Extract text if available
-        except PdfReadError:
-            st.warning(f"Warning: {pdf.name} has issues, trying alternative method...")
+    for file in files:
+        file_name = file.name.lower()
+        
+        # 📝 Handle PDF files
+        if file_name.endswith(".pdf"):
             try:
-                with pdfplumber.open(pdf) as pdf_plumber:
-                    for page in pdf_plumber.pages:
-                        text += page.extract_text() or ""
+                pdf_reader = fitz.open(stream=file.read(), filetype="pdf")  # Read PDF in memory
+                for page in pdf_reader:
+                    text += page.get_text("text")  # Extract text from each page
+            except Exception:
+                st.warning(f"Warning: {file.name} has issues, trying alternative method...")
+                try:
+                    with pdfplumber.open(file) as pdf_plumber:
+                        for page in pdf_plumber.pages:
+                            text += page.extract_text() or ""
+                except Exception as e:
+                    st.error(f"Failed to read {file.name}: {e}")
+
+        # 📄 Handle DOCX files
+        elif file_name.endswith(".docx"):
+            try:
+                doc = docx.Document(file)
+                for para in doc.paragraphs:
+                    text += para.text + "\n"
             except Exception as e:
-                st.error(f"Failed to read {pdf.name}: {e}")
-    
+                st.error(f"Failed to read {file.name}: {e}")
+
+        else:
+            st.error(f"Unsupported file format: {file.name}. Please upload PDF or DOCX.")
+
     if not text.strip():
-        st.error("Could not extract any text. The PDF might be a scanned image.")
+        st.error("Could not extract any text. The document might be a scanned image.")
     
     return text
-
 
 
 def get_text_chunks(text):
