@@ -4,6 +4,8 @@ from PyPDF2.errors import PdfReadError
 import docx
 import fitz
 from PyPDF2 import PdfReader
+from pdf2image import convert_from_bytes 
+import pytesseract
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import os
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
@@ -23,25 +25,45 @@ genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 
 
+import streamlit as st
+import pdfplumber
+import docx
+import fitz
+from PyPDF2.errors import PdfReadError
+from pdf2image import convert_from_bytes  # 🆕 Convert PDFs to images
+import pytesseract  # 🆕 OCR for extracting text from images
+
 def get_pdf_text(files):
     text = ""
     for file in files:
         file_name = file.name.lower()
-        
+
         # 📝 Handle PDF files
         if file_name.endswith(".pdf"):
             try:
-                pdf_reader = fitz.open(stream=file.read(), filetype="pdf")  # Read PDF in memory
+                pdf_reader = fitz.open(stream=file.read(), filetype="pdf")  
                 for page in pdf_reader:
-                    text += page.get_text("text")  # Extract text from each page
+                    text += page.get_text("text")  # Extract text
             except Exception:
                 st.warning(f"Warning: {file.name} has issues, trying alternative method...")
                 try:
                     with pdfplumber.open(file) as pdf_plumber:
                         for page in pdf_plumber.pages:
-                            text += page.extract_text() or ""
+                            extracted_text = page.extract_text()
+                            if extracted_text:
+                                text += extracted_text
                 except Exception as e:
                     st.error(f"Failed to read {file.name}: {e}")
+
+            # 🆕 If no text was extracted, apply OCR
+            if not text.strip():
+                st.warning(f"No text detected in {file.name}, applying OCR...")
+                try:
+                    images = convert_from_bytes(file.getvalue())  # Convert PDF to images
+                    for img in images:
+                        text += pytesseract.image_to_string(img)  # Extract text using OCR
+                except Exception as ocr_error:
+                    st.error(f"OCR failed for {file.name}: {ocr_error}")
 
         # 📄 Handle DOCX files
         elif file_name.endswith(".docx"):
@@ -56,9 +78,10 @@ def get_pdf_text(files):
             st.error(f"Unsupported file format: {file.name}. Please upload PDF or DOCX.")
 
     if not text.strip():
-        st.error("Could not extract any text. The document might be a scanned image.")
-    
+        st.error("Could not extract any text. The document might be unreadable.")
+
     return text
+
 
 
 def get_text_chunks(text):
