@@ -9,3 +9,4 @@ langchain-community
 pdfplumber
 pymupdf
 python-docx
+pdf2image
