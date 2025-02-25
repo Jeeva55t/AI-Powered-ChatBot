@@ -1,71 +1,55 @@
 import streamlit as st
 import pdfplumber
-from PyPDF2.errors import PdfReadError
 import docx
 import fitz
-from PyPDF2 import PdfReader
-from pdf2image import convert_from_bytes 
+from pdf2image import convert_from_bytes
 import pytesseract
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 import os
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 import google.generativeai as genai
-from langchain.vectorstores import FAISS
+from langchain_community.vectorstores import FAISS  # ✅ Updated Import
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
 
 load_dotenv()
-os.getenv("GOOGLE_API_KEY")
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 
-
-
-
-
-import streamlit as st
-import pdfplumber
-import docx
-import fitz
-from PyPDF2.errors import PdfReadError
-from pdf2image import convert_from_bytes  # 🆕 Convert PDFs to images
-import pytesseract  # 🆕 OCR for extracting text from images
-
+# 📝 Function to Extract Text from PDFs and DOCX
 def get_pdf_text(files):
     text = ""
     for file in files:
         file_name = file.name.lower()
 
-        # 📝 Handle PDF files
+        # 📝 Handle PDFs
         if file_name.endswith(".pdf"):
             try:
-                pdf_reader = fitz.open(stream=file.read(), filetype="pdf")  
+                pdf_reader = fitz.open(stream=file.read(), filetype="pdf")
                 for page in pdf_reader:
-                    text += page.get_text("text")  # Extract text
+                    text += page.get_text("text")
             except Exception:
                 st.warning(f"Warning: {file.name} has issues, trying alternative method...")
                 try:
                     with pdfplumber.open(file) as pdf_plumber:
                         for page in pdf_plumber.pages:
-                            extracted_text = page.extract_text()
-                            if extracted_text:
-                                text += extracted_text
+                            text += page.extract_text() or ""
                 except Exception as e:
                     st.error(f"Failed to read {file.name}: {e}")
 
-            # 🆕 If no text was extracted, apply OCR
+            # 🆕 OCR if No Text Extracted
             if not text.strip():
                 st.warning(f"No text detected in {file.name}, applying OCR...")
                 try:
-                    images = convert_from_bytes(file.getvalue())  # Convert PDF to images
+                    images = convert_from_bytes(file.getvalue())
                     for img in images:
-                        text += pytesseract.image_to_string(img)  # Extract text using OCR
+                        text += pytesseract.image_to_string(img)
                 except Exception as ocr_error:
                     st.error(f"OCR failed for {file.name}: {ocr_error}")
 
-        # 📄 Handle DOCX files
+        # 📄 Handle DOCX
         elif file_name.endswith(".docx"):
             try:
                 doc = docx.Document(file)
@@ -83,80 +67,87 @@ def get_pdf_text(files):
     return text
 
 
-
+# 🛠 Function to Chunk Text
 def get_text_chunks(text):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
-    chunks = text_splitter.split_text(text)
-    return chunks
+    return text_splitter.split_text(text)
 
 
+# 📌 Function to Create Vector Store
 def get_vector_store(text_chunks):
-    embeddings = GoogleGenerativeAIEmbeddings(model = "models/embedding-001")
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+    if not text_chunks:
+        st.error("No text data found to create vector store!")
+        return None
+
     vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
     vector_store.save_local("faiss_index")
+    return vector_store
 
 
+# 💬 Function to Load Conversational Chain
 def get_conversational_chain():
-
     prompt_template = """
-    Answer the question as detailed as possible from the provided context, make sure to provide all the details, if the answer is not in the 
-    provided context just say, "answer is not available in the context", don't provide the wrong answer\n\n
+    Answer the question as detailed as possible from the provided context. 
+    If the answer is not available, respond with: 'Answer is not available in the context'.
+    Do NOT generate incorrect responses.
+
     Context:\n {context}?\n
     Question: \n{question}\n
 
     Answer:
     """
 
-    model = ChatGoogleGenerativeAI(model="gemini-pro",
-                             temperature=0.3)
-
-    prompt = PromptTemplate(template = prompt_template, input_variables = ["context", "question"])
-    chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
-
-    return chain
+    model = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.3)
+    prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
+    return load_qa_chain(model, chain_type="stuff", prompt=prompt)
 
 
-
+# 🗣 Function to Process User Input
 def user_input(user_question):
-    embeddings = GoogleGenerativeAIEmbeddings(model = "models/embedding-001")
-    
-    new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
 
-    docs = new_db.similarity_search(user_question)
+    try:
+        new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
+        docs = new_db.similarity_search(user_question)
 
-    chain = get_conversational_chain()
+        if not docs:  # 🛑 Prevents IndexError
+            st.error("No relevant data found in the uploaded documents.")
+            return
 
-    
-    response = chain(
-        {"input_documents":docs, "question": user_question}
-        , return_only_outputs=True)
+        chain = get_conversational_chain()
+        response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
 
-    print(response)
-    st.write("Reply: ", response["output_text"])
+        print(response)
+        st.write("Reply: ", response["output_text"])
+
+    except Exception as e:
+        st.error(f"Error retrieving answer: {e}")
 
 
-
-
+# 🚀 Main Streamlit UI
 def main():
-    st.set_page_config("Chat PDF")
+    st.set_page_config(page_title="Chat PDF")
     st.header("AI-Powered PDF Chat Application")
-    st.write("This is an AI-Powered PDF Chat Application that can answer your questions from the provided PDF Files.")
+    st.write("This AI can answer your questions from the provided PDF or DOCX files.")
 
-    user_question = st.text_input("Ask a Question from the PDF Files")
+    user_question = st.text_input("Ask a question from the uploaded documents:")
 
     if user_question:
         user_input(user_question)
 
     with st.sidebar:
         st.title("Menu:")
-        pdf_docs = st.file_uploader("Upload your PDF Files and Click on the Submit & Process Button", accept_multiple_files=True)
+        pdf_docs = st.file_uploader("Upload PDF/DOCX files and click 'Submit & Process'", accept_multiple_files=True)
+
         if st.button("Submit & Process"):
             with st.spinner("Processing..."):
                 raw_text = get_pdf_text(pdf_docs)
                 text_chunks = get_text_chunks(raw_text)
-                get_vector_store(text_chunks)
-                st.success("Done")
+                vector_store = get_vector_store(text_chunks)
 
+                if vector_store:
+                    st.success("Document processing completed!")
 
 
 if __name__ == "__main__":
